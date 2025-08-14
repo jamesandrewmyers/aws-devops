@@ -1,0 +1,37 @@
+name: oidc-test
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  assume-and-whoami:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS creds via OIDC (assume role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::444101352833:role/gha-cdk-deploy-dev
+          aws-region: us-west-2
+
+      - name: whoami (AWS)
+        run: aws sts get-caller-identity --output json
+
+      # DEBUG: remove this step after testing — it prints ephemeral token claims
+      - name: Fetch raw OIDC token (debug only)
+        if: always()
+        run: |
+          # attempt to show token request url (may not be present on some runners)
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL=$ACTIONS_ID_TOKEN_REQUEST_URL"
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+            resp=$(curl -sS -X GET -H "Accept: application/json" "$ACTIONS_ID_TOKEN_REQUEST_URL")
+            echo "raw response:"
+            echo "$resp"
+          else
+            echo "ACTIONS_ID_TOKEN_REQUEST_URL not set on this runner (ok)"
+          fi
