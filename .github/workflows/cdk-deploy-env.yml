@@ -1,0 +1,50 @@
+name: cdk-deploy-env
+on:
+  workflow_call:
+    inputs:
+      artifact-name: { type: string, default: 'lambda-bundle' }
+      cdk-dir: { type: string, required: true }
+      stack: { type: string, required: true }
+      aws-account: { type: string, required: true }
+      aws-region: { type: string, default: 'us-west-2' }
+      role-to-assume: { type: string, required: true }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions: 
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: artifact
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.role-to-assume }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Place assets
+        run: |
+          mkdir -p ${{ inputs.cdk-dir }}/assets
+          cp artifact/* ${{ inputs.cdk-dir }}/assets/ || true
+
+      - name: Install CDK deps
+        working-directory: ${{ inputs.cdk-dir }}
+        run: |
+          python -m pip install -r requirements.txt || true
+          npm ci --silent || true
+
+      - name: CDK synth
+        working-directory: ${{ inputs.cdk-dir }}
+        run: npx cdk@latest synth
+
+      - name: CDK deploy
+        working-directory: ${{ inputs.cdk-dir }}
+        run: npx cdk@latest deploy ${{ inputs.stack }} --require-approval never
