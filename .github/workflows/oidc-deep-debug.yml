@@ -1,4 +1,4 @@
-name: oidc-deep-debug
+name: oidc-safe-debug
 on: workflow_dispatch
 
 permissions:
@@ -9,78 +9,60 @@ jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Print basic GitHub context
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show context
         run: |
           echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
           echo "GITHUB_REF=$GITHUB_REF"
-          echo "GITHUB_RUN_ID=$GITHUB_RUN_ID"
           echo "RUNNER_NAME=$RUNNER_NAME"
           echo "RUNNER_OS=$RUNNER_OS"
-
-      - name: Show token-related env vars (presence)
-        run: |
           echo "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL:-<not-set>}"
-          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
-            echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=present"
-          else
-            echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=<not-present>"
-          fi
 
-      - name: Attempt to fetch ID token from runner (if URL present)
+      - name: Fetch ID token (if URL exposed)
         run: |
-          set -euo pipefail
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "No ACTIONS_ID_TOKEN_REQUEST_URL available to steps on this runner; configure-aws-credentials will request token internally."
+            echo "ACTIONS_ID_TOKEN_REQUEST_URL not set; configure action will request token internally."
             exit 0
           fi
-
-          echo "Request URL: $ACTIONS_ID_TOKEN_REQUEST_URL"
+          # fetch token JSON and extract token to /tmp/id_token.jwt
           resp=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" || true)
-          echo "raw response:"
-          echo "$resp" | jq -C . || true
-
+          echo "raw response (truncated):"
+          printf '%s\n' "$resp" | jq -C . || true
           token=$(echo "$resp" | jq -r '.value // .id_token // .token // empty')
-          if [ -n "$token" ]; then
-            echo "[debug] token extracted, writing /tmp/id_token.jwt"
-            printf '%s' "$token" > /tmp/id_token.jwt
+          if [ -z "$token" ]; then
+            echo "no token extracted"; exit 0
+          fi
+          printf '%s' "$token" > /tmp/id_token.jwt
+          echo "/tmp/id_token.jwt written"
 
-            # decode payload
-            python - <<'PY'
-import json,base64,sys
-t = open('/tmp/id_token.jwt').read().strip()
-parts = t.split('.')
-if len(parts) < 2:
-    print('token structure unexpected', file=sys.stderr)
-    sys.exit(1)
-payload = parts[1] + '=' * (-len(parts[1]) % 4)
-print(json.dumps(json.loads(base64.urlsafe_b64decode(payload)), indent=2))
-PY
+      - name: Decode token payload (repo script)
+        run: |
+          if [ -f /tmp/id_token.jwt ]; then
+            python3 scripts/decode_jwt.py /tmp/id_token.jwt
           else
-            echo "[debug] no token extracted from runner response"
+            echo "/tmp/id_token.jwt not present; skipping decode"
           fi
 
-      - name: Try manual STS assume-role-with-web-identity (shows AWS error if any)
+      - name: Attempt manual STS assume-role-with-web-identity
         env:
-          ROLE_ARN: arn:aws:iam::444101352833:role/gha-cdk-deploy-dev   # <<< REPLACE if needed
+          ROLE_ARN: arn:aws:iam::444101352833:role/gha-cdk-deploy-dev
         run: |
-          set -euo pipefail
           if [ -f /tmp/id_token.jwt ]; then
-            echo "Calling aws sts assume-role-with-web-identity --role-arn $ROLE_ARN ..."
             aws sts assume-role-with-web-identity \
               --role-arn "$ROLE_ARN" \
               --role-session-name debug-session \
               --web-identity-token file:///tmp/id_token.jwt || true
           else
-            echo "/tmp/id_token.jwt not present; skipping manual assume-role test"
+            echo "no token file; skipping manual assume-role test"
           fi
 
-      - name: Execute configure-aws-credentials action (normal path)
+      - name: Try configure-aws-credentials action
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::444101352833:role/gha-cdk-deploy-dev
           aws-region: us-west-2
 
-      - name: whoami (AWS)
-        run: |
-          set +e
-          aws sts get-caller-identity --output json || true
+      - name: whoami
+        run: aws sts get-caller-identity --output json || true
