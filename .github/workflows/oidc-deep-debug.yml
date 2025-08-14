@@ -1,0 +1,74 @@
+name: oidc-deep-debug
+on: workflow_dispatch
+
+# MUST be top-level
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print basic GitHub context
+        run: |
+          echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_RUN_ID=$GITHUB_RUN_ID"
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          echo "RUNNER_OS=$RUNNER_OS"
+
+      - name: Show token-related env vars (presence)
+        run: |
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL:-<not-set>}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+<present> or <empty>}"
+
+      - name: Attempt to fetch ID token from runner (if URL present)
+        if: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL != '' }}
+        run: |
+          set -euo pipefail
+          echo "Request URL: $ACTIONS_ID_TOKEN_REQUEST_URL"
+          resp=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL" || true)
+          echo "raw response:"
+          echo "$resp" | jq -C . || true
+          token=$(echo "$resp" | jq -r '.value // .id_token // .token // empty')
+          echo "token extracted? = ${token:+yes/no}"
+          if [ -n "$token" ]; then
+            echo "$token" > /tmp/id_token.jwt
+            python - <<'PY'
+import json,base64,sys
+t=open('/tmp/id_token.jwt').read().strip()
+parts=t.split('.')
+if len(parts)<2:
+  print("token structure unexpected",file=sys.stderr); sys.exit(1)
+p=parts[1]
+p += '=' * (-len(p) % 4)
+print(json.dumps(json.loads(base64.urlsafe_b64decode(p)), indent=2))
+PY
+          fi
+
+      - name: (if token not fetched) Show note and try aws-actions configure (normal path)
+        if: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL == '' }}
+        run: |
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL not available to steps on this runner. configure-aws-credentials will request token internally."
+
+      - name: Try manual STS assume-role-with-web-identity (shows AWS error if any)
+        if: ${{ (env.ACTIONS_ID_TOKEN_REQUEST_URL != '') && (exists('/tmp/id_token.jwt')) }}
+        env:
+          ROLE_ARN: arn:aws:iam::444101352833:role/gha-cdk-deploy-dev
+        run: |
+          set -euo pipefail
+          echo "Calling aws sts assume-role-with-web-identity --role-arn $ROLE_ARN --web-identity-token file:///tmp/id_token.jwt --role-session-name debug"
+          aws sts assume-role-with-web-identity \
+            --role-arn "$ROLE_ARN" \
+            --role-session-name debug \
+            --web-identity-token file:///tmp/id_token.jwt || true
+
+      - name: Run configure-aws-credentials action (normal flow)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::444101352833:role/gha-cdk-deploy-dev
+          aws-region: us-west-2
+
+      - name: whoami (AWS)
+        run: aws sts get-caller-identity --output json || true
