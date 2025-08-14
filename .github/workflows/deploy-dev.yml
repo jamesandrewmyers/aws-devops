@@ -1,0 +1,71 @@
+name: deploy-dev
+on:
+  push:
+    branches: [ master ]    # your trunk branch
+
+# OIDC permission must be top-level
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node (for CDK)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install app dependencies and build lambda assets
+        run: |
+          python -m pip install -U pip
+          # Install app deps into app/dist so CDK can package from that folder
+          mkdir -p app/dist
+          if [ -f app/requirements.txt ]; then
+            pip install -r app/requirements.txt -t app/dist
+          fi
+          # copy source handlers (adjust path if different)
+          cp -R app/handlers app/dist/handlers || true
+          ls -la app/dist || true
+
+      - name: Install CDK & project deps
+        run: |
+          python -m pip install -r cdk/requirements.txt || true
+          # use npx to avoid global install; ensures latest cdk available
+          npm ci --silent || true
+        working-directory: ./cdk
+
+      - name: Configure AWS credentials via OIDC (assume role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::444101352833:role/gha-cdk-deploy-dev
+          aws-region: us-west-2
+
+      - name: CDK bootstrap (idempotent)
+        working-directory: ./cdk
+        run: |
+          # ensure npm tooling available to npx cdk
+          npx cdk@latest --version
+          # bootstrap account/region if needed (safe to run)
+          npx cdk@latest bootstrap aws://444101352833/us-west-2 || true
+
+      - name: CDK synth
+        working-directory: ./cdk
+        run: npx cdk@latest synth
+
+      - name: CDK deploy (dev)
+        working-directory: ./cdk
+        run: |
+          # deploy the dev stack; no interactive prompt
+          npx cdk@latest deploy aws-devops-api-dev --require-approval never
