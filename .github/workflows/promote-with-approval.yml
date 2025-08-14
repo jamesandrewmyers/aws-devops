@@ -1,0 +1,26 @@
+name: promote-with-approval
+on:
+  workflow_call:
+    inputs:
+      cdk-dir: { type: string, required: true }
+      stack: { type: string, required: true }
+      role-to-assume: { type: string, required: true }
+      aws-account: { type: string, required: true }
+      aws-region: { type: string, default: 'us-west-2' }
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: echo "Approved to continue"
+
+  deploy:
+    needs: gate
+    uses: ./.github/workflows/cdk-deploy-env.yml@main
+    with:
+      cdk-dir: ${{ inputs.cdk-dir }}
+      stack: ${{ inputs.stack }}
+      role-to-assume: ${{ inputs.role-to-assume }}
+      aws-account: ${{ inputs.aws-account }}
+      aws-region: ${{ inputs.aws-region }}

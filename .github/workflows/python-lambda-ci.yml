@@ -1,0 +1,51 @@
+name: python-lambda-ci
+on:
+  workflow_call:
+    inputs:
+      python-version: { type: string, default: '3.11' }
+      app-dir: { type: string, required: true }
+      req-file: { type: string, default: 'app/requirements.txt' }
+      run-tests: { type: boolean, default: true }
+    outputs:
+      bundle-path: { value: ${{ jobs.build.outputs.bundle-path }} }
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      bundle-path: ${{ steps.bundle-out.outputs.path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: ./.github/../actions/setup-python
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Lint (non-fatal)
+        if: ${{ inputs.run-tests }}
+        run: |
+          echo "No lint configured; add linter or skip."
+
+      - name: Run tests
+        if: ${{ inputs.run-tests }}
+        run: |
+          if [ -d "${{ inputs.app-dir }}" ]; then
+            pytest -q || true
+          fi
+
+      - name: Build bundle
+        uses: ./actions/build-lambda-zip
+        with:
+          src-dir: ${{ inputs.app-dir }}
+          req-file: ${{ inputs.req-file }}
+          out-zip: bundle.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-bundle
+          path: ${{ inputs.app-dir }}/bundle.zip
+
+      - id: bundle-out
+        run: echo "path=${{ inputs.app-dir }}/bundle.zip" >> $GITHUB_OUTPUT

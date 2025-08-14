@@ -1,0 +1,25 @@
+name: build-lambda-zip
+description: Build a lambda zip from a source dir
+inputs:
+  src-dir:
+    required: true
+  req-file:
+    required: true
+  out-zip:
+    required: false
+    default: bundle.zip
+runs:
+  using: composite
+  steps:
+    - name: Create dist
+      shell: bash
+      run: |
+        mkdir -p ${{ inputs.src-dir }}/dist
+        if [ -f "${{ inputs.req-file }}" ]; then
+          python -m pip install -r "${{ inputs.req-file }}" -t "${{ inputs.src-dir }}/dist"
+        fi
+        cp -R ${{ inputs.src-dir }}/handlers "${{ inputs.src-dir }}/dist/" 2>/dev/null || true
+        (cd ${{ inputs.src-dir }}/dist && zip -r ../${{ inputs.out-zip }} .)
+    - name: Output zip path
+      id: out
+      run: echo "path=${{ inputs.src-dir }}/${{ inputs.out-zip }}" >> $GITHUB_OUTPUT
