@@ -7,7 +7,7 @@ on:
       req-file: { type: string, default: 'app/requirements.txt' }
       run-tests: { type: boolean, default: true }
     outputs:
-      bundle-path: { value: ${{ jobs.build.outputs.bundle-path }} }
+      bundle-path: { value: "${{ jobs.build.outputs.bundle-path }}" }
 
 jobs:
   build:
