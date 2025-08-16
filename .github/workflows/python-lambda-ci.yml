@@ -2,12 +2,21 @@ name: python-lambda-ci
 on:
   workflow_call:
     inputs:
-      python-version: { type: string, default: '3.11' }
-      app-dir: { type: string, required: true }
-      req-file: { type: string, default: 'app/requirements.txt' }
-      run-tests: { type: boolean, default: true }
+      python-version:
+        type: string
+        default: '3.11'
+      app-dir:
+        type: string
+        required: true
+      req-file:
+        type: string
+        default: 'app/requirements.txt'
+      run-tests:
+        type: boolean
+        default: true
     outputs:
-      bundle-path: { value: "${{ jobs.build.outputs.bundle-path }}" }
+      bundle-path:
+        value: ${{ jobs.build.outputs.bundle-path }}
 
 jobs:
   build:
@@ -15,10 +24,11 @@ jobs:
     outputs:
       bundle-path: ${{ steps.bundle-out.outputs.path }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: ./.github/../actions/setup-python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
 
@@ -31,15 +41,38 @@ jobs:
         if: ${{ inputs.run-tests }}
         run: |
           if [ -d "${{ inputs.app-dir }}" ]; then
-            pytest -q || true
+            if [ -f "${{ inputs.app-dir }}/pytest.ini" ] || [ -d "tests" ]; then
+              pip install -r "${{ inputs.req-file }}" || true
+              pytest -q || true
+            else
+              echo "no tests detected; skipping pytest"
+            fi
+          else
+            echo "app-dir not present; skipping tests"
           fi
 
       - name: Build bundle
-        uses: ./actions/build-lambda-zip
-        with:
-          src-dir: ${{ inputs.app-dir }}
-          req-file: ${{ inputs.req-file }}
-          out-zip: bundle.zip
+        run: |
+          set -euo pipefail
+          SRC_DIR="${{ inputs.app-dir }}"
+          OUT_ZIP="${SRC_DIR}/bundle.zip"
+          DIST_DIR="${SRC_DIR}/.dist_for_packaging"
+          rm -rf "$DIST_DIR" "$OUT_ZIP"
+          mkdir -p "$DIST_DIR"
+          if [ -f "${{ inputs.req-file }}" ]; then
+            python -m pip install --upgrade pip
+            python -m pip install -r "${{ inputs.req-file }}" -t "$DIST_DIR"
+          fi
+          # copy source files into dist (only copy python files to avoid large zips)
+          if [ -d "$SRC_DIR" ]; then
+            find "$SRC_DIR" -maxdepth 1 -type f -name '*.py' -exec cp {} "$DIST_DIR"/ \;
+            # also copy a handlers/ subdir if present
+            if [ -d "${SRC_DIR}/handlers" ]; then
+              cp -R "${SRC_DIR}/handlers" "$DIST_DIR/"
+            fi
+          fi
+          (cd "$DIST_DIR" && zip -r "../bundle.zip" .)
+          echo "bundle created: $OUT_ZIP"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
