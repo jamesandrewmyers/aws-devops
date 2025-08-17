@@ -33,9 +33,15 @@ on:
         type: string
         default: "us-west-2"
       role-to-assume:
-        description: "ARN of the role to assume via OIDC for AWS permissions."
-        required: true
+        description: "Optional: ARN of the role to assume via OIDC for AWS permissions. If empty, the secret GITHUB_OIDC_ROLE_ARN will be used."
+        required: false
         type: string
+        default: ""
+
+    secrets:
+      GITHUB_OIDC_ROLE_ARN:
+        required: true
+        description: "Fallback role ARN to assume via OIDC when inputs.role-to-assume is not provided."
 
 permissions:
   id-token: write
@@ -52,13 +58,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      # <-- IMPORTANT: configure OIDC BEFORE checking out the central aws-devops repo.
-      # That preserves the repo/subject context for the minted id-token so it matches
-      # the role trust policy scoped to the caller repo.
-      - name: Configure AWS credentials via OIDC (assume provided role)
+      - name: Resolve role to assume (inputs preferred, else secret)
+        id: resolve_role
+        run: |
+          set -euo pipefail
+          INP_ROLE="${{ inputs.role-to-assume }}"
+          SECRET_ROLE="${{ secrets.GITHUB_OIDC_ROLE_ARN }}"
+          if [ -n "$INP_ROLE" ]; then
+            echo "Using role from inputs"
+            echo "role=$INP_ROLE" >> "$GITHUB_OUTPUT"
+          else
+            echo "Using role from secret GITHUB_OIDC_ROLE_ARN"
+            echo "role=$SECRET_ROLE" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Important: configure OIDC BEFORE checking out the central repo to preserve caller token subject
+      - name: Configure AWS credentials via OIDC (assume resolved role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ inputs.role-to-assume }}
+          role-to-assume: ${{ steps.resolve_role.outputs.role }}
           aws-region: ${{ inputs.aws-region }}
 
       - name: Confirm AWS identity
@@ -84,7 +102,6 @@ jobs:
           set -euo pipefail
           echo "Fetching artifact '$ARTIFACT_NAME' from run id $RUN_ID in repo $REPO"
 
-          # Ensure jq present
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq jq
