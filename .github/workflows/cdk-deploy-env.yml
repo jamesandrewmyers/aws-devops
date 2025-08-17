@@ -1,26 +1,55 @@
-name: cdk-deploy-env
+name: cdk-deploy-env (reusable)
+
 on:
   workflow_call:
     inputs:
-      artifact-name: { type: string, default: 'lambda-bundle' }
-      cdk-dir: { type: string, required: true }
-      stack: { type: string, required: true }
-      aws-account: { type: string, required: true }
-      aws-region: { type: string, default: 'us-west-2' }
-      role-to-assume: { type: string, required: true }
+      artifact-run-id:
+        description: "If provided, the workflow will fetch the named artifact from this workflow run id (in the caller repo). If empty, it will use actions/download-artifact to fetch from the current run."
+        required: false
+        type: string
+        default: ""
+      artifact-name:
+        description: "Artifact name uploaded by the caller (upload-artifact name)."
+        required: false
+        type: string
+        default: "lambda-bundle"
+      cdk-dir:
+        description: "Path to the CDK app. Can be in the caller repo or in the central aws-devops repo (resolution tries several common locations)."
+        required: false
+        type: string
+        default: "cdk"
+      stack:
+        description: "CDK stack to deploy. If empty, deploys --all."
+        required: false
+        type: string
+        default: ""
+      aws-account:
+        description: "Target AWS account id (informational)."
+        required: true
+        type: string
+      aws-region:
+        description: "AWS region to target."
+        required: false
+        type: string
+        default: "us-west-2"
+      role-to-assume:
+        description: "ARN of the role to assume via OIDC for AWS permissions."
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-
+    environment: ${{ inputs.aws-account }}
     steps:
+
       - name: Checkout caller repository (consumer)
         uses: actions/checkout@v4
         with:
-          # default checkout is the consumer repo that invoked this reusable workflow
           fetch-depth: 0
 
       - name: Checkout aws-devops repo (central CDK/runtime)
@@ -28,31 +57,76 @@ jobs:
         with:
           repository: jamesandrewmyers/aws-devops
           path: aws-devops-repo
-          # uses caller's token; available in reusable workflows
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Configure AWS creds via OIDC (assume role from input)
+      - name: Configure AWS credentials via OIDC (assume provided role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ inputs.role-to-assume }}
           aws-region: ${{ inputs.aws-region }}
 
-      - name: whoami
+      - name: Confirm AWS identity
         run: aws sts get-caller-identity --output json
+
+      - name: Download artifact from a different workflow run (if artifact-run-id provided)
+        if: ${{ inputs.artifact-run-id != '' }}
+        env:
+          GITHUB_API: https://api.github.com
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          RUN_ID: ${{ inputs.artifact-run-id }}
+        run: |
+          set -euo pipefail
+          echo "Fetching artifact '$ARTIFACT_NAME' from run id $RUN_ID in repo $REPO"
+
+          # Ensure jq present
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq jq
+          fi
+
+          API_URL="$GITHUB_API/repos/$REPO/actions/runs/$RUN_ID/artifacts"
+          resp=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$API_URL")
+
+          # Try to find the archive_download_url for the named artifact
+          archive_url=$(echo "$resp" | jq -r --arg name "$ARTIFACT_NAME" '.artifacts[] | select(.name==$name) | .archive_download_url' || true)
+
+          if [ -z "$archive_url" ] || [ "$archive_url" = "null" ]; then
+            echo "ERROR: artifact named '$ARTIFACT_NAME' not found in run $RUN_ID"
+            echo "Available artifacts in that run:"
+            echo "$resp" | jq -r '.artifacts[].name' || true
+            exit 1
+          fi
+
+          echo "Downloading artifact from: $archive_url"
+          # archive_download_url requires Authorization header. Download the zip.
+          curl -L -sS -H "Authorization: Bearer $GITHUB_TOKEN" -o artifact.zip "$archive_url"
+          unzip -o artifact.zip -d ./artifact
+          echo "Artifact extracted to ./artifact/"
+
+      - name: Download artifact from current run (fallback)
+        if: ${{ inputs.artifact-run-id == '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ./artifact
 
       - name: Resolve CDK directory
         id: resolve_cdk
         run: |
-          set -e
+          set -euo pipefail
           INPUT="${{ inputs.cdk-dir }}"
           candidates=(
             "./$INPUT"
             "./iac/$INPUT"
+            "./${INPUT}"
+            "./iac/cdk"
             "aws-devops-repo/$INPUT"
             "aws-devops-repo/iac/$INPUT"
             "aws-devops-repo/iac/cdk"
-            "./iac/cdk"
+            "aws-devops-repo/cdk"
           )
           found=""
           for p in "${candidates[@]}"; do
@@ -63,49 +137,58 @@ jobs:
             fi
           done
           if [ -z "$found" ]; then
-            echo "No CDK directory found. Tried: ${candidates[*]}"
+            echo "ERROR: No CDK directory found. Tried: ${candidates[*]}"
             exit 1
           fi
-          echo "cdk_dir=$found" >> $GITHUB_OUTPUT
+          echo "cdk_dir=$found" >> "$GITHUB_OUTPUT"
 
-      - name: Install CDK deps (resolved dir)
+      - name: Install CDK & dependencies (python/node)
         run: |
-          set -e
+          set -euo pipefail
           CDK_DIR="${{ steps.resolve_cdk.outputs.cdk_dir }}"
-          echo "Installing dependencies in $CDK_DIR"
+          echo "Installing dependencies in $CDK_DIR (if present)"
+          # Python deps
           if [ -f "$CDK_DIR/requirements.txt" ]; then
             python -m pip install --upgrade pip
             python -m pip install -r "$CDK_DIR/requirements.txt" || true
           fi
-          # install node deps if package.json exists
+          # Node deps
           if [ -f "$CDK_DIR/package.json" ]; then
             (cd "$CDK_DIR" && npm ci --silent) || true
           fi
-          # ensure cdk available via npx
-          npx cdk@latest --version || true
+          # Ensure npx/cdk available
+          npx --no-install cdk --version || true
 
-      - name: Prepare artifact for CDK (if present)
-        if: always()
+      - name: Copy artifact into CDK app (if present)
         run: |
-          set -e
-          # consumer artifact is expected at ./artifact (caller job used download-artifact)
+          set -euo pipefail
           CDK_DIR="${{ steps.resolve_cdk.outputs.cdk_dir }}"
           if [ -d "./artifact" ]; then
             mkdir -p "$CDK_DIR/artifact"
             cp -R ./artifact/* "$CDK_DIR/artifact/" || true
-            echo "artifact copied into $CDK_DIR/artifact/"
+            echo "Artifact copied into $CDK_DIR/artifact/"
           else
-            echo "No ./artifact directory present in workflow run; continuing."
+            echo "No ./artifact directory present; continuing without artifact copy."
           fi
 
-      - name: CDK synth (resolved dir)
+      - name: CDK synth
         working-directory: ${{ steps.resolve_cdk.outputs.cdk_dir }}
+        env:
+          AWS_REGION: ${{ inputs.aws-region }}
+          AWS_ACCOUNT: ${{ inputs.aws-account }}
         run: |
-          set -e
-          npx cdk@latest synth
+          set -euo pipefail
+          npx cdk synth
 
-      - name: CDK deploy (resolved dir)
+      - name: CDK deploy
         working-directory: ${{ steps.resolve_cdk.outputs.cdk_dir }}
+        env:
+          AWS_REGION: ${{ inputs.aws-region }}
+          AWS_ACCOUNT: ${{ inputs.aws-account }}
         run: |
-          set -e
-          npx cdk@latest deploy ${{ inputs.stack }} --require-approval never
+          set -euo pipefail
+          if [ -n "${{ inputs.stack }}" ]; then
+            npx cdk deploy "${{ inputs.stack }}" --require-approval never
+          else
+            npx cdk deploy --all --require-approval never
+          fi
