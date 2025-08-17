@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       artifact-run-id:
-        description: "If provided, the workflow will fetch the named artifact from this workflow run id (in the caller repo). If empty, it will use actions/download-artifact to fetch from the current run."
+        description: "If provided, fetch artifact from this workflow run id (in the caller repo). If empty, use actions/download-artifact for current run."
         required: false
         type: string
         default: ""
@@ -52,14 +52,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout aws-devops repo (central CDK/runtime)
-        uses: actions/checkout@v4
-        with:
-          repository: jamesandrewmyers/aws-devops
-          path: aws-devops-repo
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
+      # <-- IMPORTANT: configure OIDC BEFORE checking out the central aws-devops repo.
+      # That preserves the repo/subject context for the minted id-token so it matches
+      # the role trust policy scoped to the caller repo.
       - name: Configure AWS credentials via OIDC (assume provided role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -68,6 +63,14 @@ jobs:
 
       - name: Confirm AWS identity
         run: aws sts get-caller-identity --output json
+
+      - name: Checkout aws-devops repo (central CDK/runtime)
+        uses: actions/checkout@v4
+        with:
+          repository: jamesandrewmyers/aws-devops
+          path: aws-devops-repo
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Download artifact from a different workflow run (if artifact-run-id provided)
         if: ${{ inputs.artifact-run-id != '' }}
@@ -90,7 +93,6 @@ jobs:
           API_URL="$GITHUB_API/repos/$REPO/actions/runs/$RUN_ID/artifacts"
           resp=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$API_URL")
 
-          # Try to find the archive_download_url for the named artifact
           archive_url=$(echo "$resp" | jq -r --arg name "$ARTIFACT_NAME" '.artifacts[] | select(.name==$name) | .archive_download_url' || true)
 
           if [ -z "$archive_url" ] || [ "$archive_url" = "null" ]; then
@@ -101,7 +103,6 @@ jobs:
           fi
 
           echo "Downloading artifact from: $archive_url"
-          # archive_download_url requires Authorization header. Download the zip.
           curl -L -sS -H "Authorization: Bearer $GITHUB_TOKEN" -o artifact.zip "$archive_url"
           unzip -o artifact.zip -d ./artifact
           echo "Artifact extracted to ./artifact/"
@@ -147,16 +148,13 @@ jobs:
           set -euo pipefail
           CDK_DIR="${{ steps.resolve_cdk.outputs.cdk_dir }}"
           echo "Installing dependencies in $CDK_DIR (if present)"
-          # Python deps
           if [ -f "$CDK_DIR/requirements.txt" ]; then
             python -m pip install --upgrade pip
             python -m pip install -r "$CDK_DIR/requirements.txt" || true
           fi
-          # Node deps
           if [ -f "$CDK_DIR/package.json" ]; then
             (cd "$CDK_DIR" && npm ci --silent) || true
           fi
-          # Ensure npx/cdk available
           npx --no-install cdk --version || true
 
       - name: Copy artifact into CDK app (if present)
