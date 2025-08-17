@@ -40,8 +40,8 @@ on:
 
     secrets:
       GITHUB_OIDC_ROLE_ARN:
-        required: true
-        description: "Fallback role ARN to assume via OIDC when inputs.role-to-assume is not provided."
+        required: false
+        description: "Optional fallback role ARN to assume via OIDC when inputs.role-to-assume is not provided."
 
 permissions:
   id-token: write
