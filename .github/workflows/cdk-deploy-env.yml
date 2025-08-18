@@ -33,18 +33,18 @@ on:
         type: string
         default: "us-west-2"
       role-to-assume:
-        description: "Optional: ARN of the role to assume via OIDC for AWS permissions. If empty, the secret GITHUB_OIDC_ROLE_ARN will be used."
+        description: "Optional: ARN of the role to assume via OIDC for AWS permissions. If empty, the secret FORWARDED_OIDC_ROLE_ARN will be used."
         required: false
         type: string
         default: ""
 
     secrets:
-      GITHUB_OIDC_ROLE_ARN:
+      FORWARDED_OIDC_ROLE_ARN:
         required: false
         description: "Optional fallback role ARN to assume via OIDC when inputs.role-to-assume is not provided."
-      GITHUB_TOKEN:
+      FORWARDED_GITHUB_TOKEN:
         required: false
-        description: "Optional: forwarded repo token (caller should forward ${{ secrets.GITHUB_TOKEN }}) so the reusable workflow can call Actions API."
+        description: "Optional: caller should forward their repo token (e.g. ${{ secrets.GITHUB_TOKEN }}) under this name so the reusable workflow can call the Actions API."
 
 permissions:
   id-token: write
@@ -66,12 +66,12 @@ jobs:
         run: |
           set -euo pipefail
           INP_ROLE="${{ inputs.role-to-assume }}"
-          SECRET_ROLE="${{ secrets.GITHUB_OIDC_ROLE_ARN }}"
+          SECRET_ROLE="${{ secrets.FORWARDED_OIDC_ROLE_ARN }}"
           if [ -n "$INP_ROLE" ]; then
             echo "Using role from inputs"
             echo "role=$INP_ROLE" >> "$GITHUB_OUTPUT"
           else
-            echo "Using role from secret GITHUB_OIDC_ROLE_ARN"
+            echo "Using role from secret FORWARDED_OIDC_ROLE_ARN"
             echo "role=$SECRET_ROLE" >> "$GITHUB_OUTPUT"
           fi
 
@@ -90,15 +90,15 @@ jobs:
         with:
           repository: jamesandrewmyers/aws-devops
           path: aws-devops-repo
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.FORWARDED_GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Download artifact from a different workflow run (if artifact-run-id provided)
         if: ${{ inputs.artifact-run-id != '' }}
         env:
           GITHUB_API: https://api.github.com
-          # use the forwarded token (caller must forward secrets.GITHUB_TOKEN) or empty
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # use the forwarded token (caller must forward secrets.FORWARDED_GITHUB_TOKEN)
+          GITHUB_TOKEN: ${{ secrets.FORWARDED_GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           ARTIFACT_NAME: ${{ inputs.artifact-name }}
           RUN_ID: ${{ inputs.artifact-run-id }}
@@ -107,7 +107,7 @@ jobs:
           echo "Fetching artifact '$ARTIFACT_NAME' from run id $RUN_ID in repo $REPO"
 
           if [ -z "${GITHUB_TOKEN:-}" ]; then
-            echo "ERROR: no GITHUB_TOKEN available in this workflow to call the Actions API. Caller must forward secrets.GITHUB_TOKEN."
+            echo "ERROR: no FORWARDED_GITHUB_TOKEN available in this workflow to call the Actions API. Caller must forward secrets.FORWARDED_GITHUB_TOKEN."
             exit 1
           fi
 
