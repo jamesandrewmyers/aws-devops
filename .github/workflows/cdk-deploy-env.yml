@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       artifact-run-id:
-        description: "If provided, fetch artifact from this workflow run id (in the caller repo). If empty, use actions/download-artifact for current run."
+        description: "If provided, fetch the named artifact from this workflow run id (in the caller repo). If empty, use actions/download-artifact for current run."
         required: false
         type: string
         default: ""
@@ -42,6 +42,9 @@ on:
       GITHUB_OIDC_ROLE_ARN:
         required: false
         description: "Optional fallback role ARN to assume via OIDC when inputs.role-to-assume is not provided."
+      GITHUB_TOKEN:
+        required: false
+        description: "Optional: forwarded repo token (caller should forward ${{ secrets.GITHUB_TOKEN }}) so the reusable workflow can call Actions API."
 
 permissions:
   id-token: write
@@ -72,7 +75,7 @@ jobs:
             echo "role=$SECRET_ROLE" >> "$GITHUB_OUTPUT"
           fi
 
-      # Important: configure OIDC BEFORE checking out the central repo to preserve caller token subject
+      # Configure OIDC BEFORE checking out the central repo to preserve caller token subject
       - name: Configure AWS credentials via OIDC (assume resolved role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -94,6 +97,7 @@ jobs:
         if: ${{ inputs.artifact-run-id != '' }}
         env:
           GITHUB_API: https://api.github.com
+          # use the forwarded token (caller must forward secrets.GITHUB_TOKEN) or empty
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           ARTIFACT_NAME: ${{ inputs.artifact-name }}
@@ -101,6 +105,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "Fetching artifact '$ARTIFACT_NAME' from run id $RUN_ID in repo $REPO"
+
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "ERROR: no GITHUB_TOKEN available in this workflow to call the Actions API. Caller must forward secrets.GITHUB_TOKEN."
+            exit 1
+          fi
 
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update -qq
@@ -114,7 +123,7 @@ jobs:
 
           if [ -z "$archive_url" ] || [ "$archive_url" = "null" ]; then
             echo "ERROR: artifact named '$ARTIFACT_NAME' not found in run $RUN_ID"
-            echo "Available artifacts in that run:"
+            echo "Available artifacts in that run (names):"
             echo "$resp" | jq -r '.artifacts[].name' || true
             exit 1
           fi
