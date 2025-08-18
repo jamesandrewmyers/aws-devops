@@ -44,7 +44,7 @@ on:
         description: "Optional fallback role ARN to assume via OIDC when inputs.role-to-assume is not provided."
       FORWARDED_GITHUB_TOKEN:
         required: false
-        description: "Optional: caller should forward their repo token (e.g. ${{ secrets.GITHUB_TOKEN }}) under this name so the reusable workflow can call the Actions API."
+        description: "Optional: caller should forward their repo token under this name so the reusable workflow can call the Actions API."
 
 permissions:
   id-token: write
