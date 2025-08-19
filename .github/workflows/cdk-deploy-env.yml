@@ -206,6 +206,21 @@ jobs:
           echo "Listing cdk.out after synth"
           ls -R ./cdk.out || true
 
+      - name: Check if CDK bootstrap stack exists
+        id: check_bootstrap
+        run: |
+          set -euo pipefail
+          if aws cloudformation describe-stacks --stack-name CDKToolkit >/dev/null 2>&1; then
+            echo "bootstrap_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "bootstrap_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bootstrap CDK (if needed)
+        if: steps.check_bootstrap.outputs.bootstrap_exists == 'false'
+        run: |
+          npx aws-cdk@2.1025.0 bootstrap aws://$AWS_ACCOUNT/$AWS_REGION
+
       - name: CDK deploy
         working-directory: ${{ steps.resolve_cdk.outputs.cdk_dir }}
         env:
