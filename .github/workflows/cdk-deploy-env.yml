@@ -197,9 +197,11 @@ jobs:
           AWS_ACCOUNT: ${{ inputs.aws-account }}
         run: |
           set -euo pipefail
+          echo "Running cdk synth in $(pwd)"
+          ls -R .
           npx cdk synth --verbose
+          echo "Listing cdk.out after synth"
           ls -R ./cdk.out || true
-
 
       - name: CDK deploy
         working-directory: ${{ steps.resolve_cdk.outputs.cdk_dir }}
