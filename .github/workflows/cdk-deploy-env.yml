@@ -149,28 +149,9 @@ jobs:
         id: resolve_cdk
         run: |
           set -euo pipefail
-          INPUT="${{ inputs.cdk-dir }}"
-          candidates=(
-            "$INPUT"
-            "iac/$INPUT"
-            "${INPUT}"
-            "iac/cdk"
-            "aws-devops-repo/$INPUT"
-            "aws-devops-repo/iac/$INPUT"
-            "aws-devops-repo/iac/cdk"
-            "aws-devops-repo/cdk"
-          )
-          found=""
-          for p in "${candidates[@]}"; do
-            echo "Checking for CDK dir $p"
-            if [ -d "$p" ]; then
-              echo "Found CDK dir: $p"
-              found="$p"
-              break
-            fi
-          done
+          found="${{ inputs.cdk-dir }}"
           if [ -z "$found" ]; then
-            echo "ERROR: No CDK directory found. Tried: ${candidates[*]}"
+            echo "ERROR: No CDK directory found. Tried: $found"
             exit 1
           fi
           echo "cdk_dir=$found" >> "$GITHUB_OUTPUT"
