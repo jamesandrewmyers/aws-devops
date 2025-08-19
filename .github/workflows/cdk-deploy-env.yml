@@ -17,7 +17,7 @@ on:
         description: "Path to the CDK app. Can be in the caller repo or in the central aws-devops repo (resolution tries several common locations)."
         required: false
         type: string
-        default: "./cdk"
+        default: "cdk"
       stack:
         description: "CDK stack to deploy. If empty, deploys --all."
         required: false
@@ -151,10 +151,10 @@ jobs:
           set -euo pipefail
           INPUT="${{ inputs.cdk-dir }}"
           candidates=(
-            "./$INPUT"
-            "./iac/$INPUT"
-            "./${INPUT}"
-            "./iac/cdk"
+            "$INPUT"
+            "iac/$INPUT"
+            "${INPUT}"
+            "iac/cdk"
             "aws-devops-repo/$INPUT"
             "aws-devops-repo/iac/$INPUT"
             "aws-devops-repo/iac/cdk"
@@ -162,6 +162,7 @@ jobs:
           )
           found=""
           for p in "${candidates[@]}"; do
+            echo "Checking for CDK dir $p"
             if [ -d "$p" ]; then
               echo "Found CDK dir: $p"
               found="$p"
