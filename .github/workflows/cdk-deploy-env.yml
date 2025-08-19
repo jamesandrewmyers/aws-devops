@@ -163,7 +163,9 @@ jobs:
           echo "Installing dependencies in $CDK_DIR (if present)"
           if [ -f "$CDK_DIR/requirements.txt" ]; then
             python -m pip install --upgrade pip
-            python -m pip install -r "$CDK_DIR/requirements.txt" || true
+            python -m pip install -r "$CDK_DIR/requirements.txt"
+            python -m pip show aws-cdk-lib || { echo "aws-cdk-lib not installed!"; exit 1; }
+
           fi
           if [ -f "$CDK_DIR/package.json" ]; then
             (cd "$CDK_DIR" && npm ci --silent) || true
