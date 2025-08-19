@@ -170,6 +170,7 @@ jobs:
           if [ -f "$CDK_DIR/package.json" ]; then
             (cd "$CDK_DIR" && npm ci --silent) || true
           fi
+          npm install -g cdk@2.1025.0
           npx --no-install cdk --version || true
 
       - name: Copy artifact into CDK app (if present)
