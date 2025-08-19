@@ -17,7 +17,7 @@ on:
         description: "Path to the CDK app. Can be in the caller repo or in the central aws-devops repo (resolution tries several common locations)."
         required: false
         type: string
-        default: "cdk"
+        default: "./cdk"
       stack:
         description: "CDK stack to deploy. If empty, deploys --all."
         required: false
