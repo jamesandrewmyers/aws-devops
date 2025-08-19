@@ -182,6 +182,14 @@ jobs:
             echo "No ./artifact directory present; continuing without artifact copy."
           fi
 
+      - name: Run app.py directly (debug)
+        working-directory: ${{ steps.resolve_cdk.outputs.cdk_dir }}
+        run: |
+          set -euo pipefail
+          echo "=== Running python app.py for debug ==="
+          python app.py
+          echo "=== app.py completed successfully ==="
+
       - name: CDK synth
         working-directory: ${{ steps.resolve_cdk.outputs.cdk_dir }}
         env:
