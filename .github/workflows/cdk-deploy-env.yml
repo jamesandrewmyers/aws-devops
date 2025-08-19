@@ -140,6 +140,11 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ./artifact
 
+      - name: List checked out files (debug)
+        run: |
+          echo "Listing repo contents at $PWD"
+          ls -R
+
       - name: Resolve CDK directory
         id: resolve_cdk
         run: |
